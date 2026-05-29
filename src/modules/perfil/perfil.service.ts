@@ -25,15 +25,12 @@ export interface InformacionPersonal {
 export class PerfilService {
   private readonly logger = new Logger(PerfilService.name);
 
-  // TODO: obtener el IdUsuario desde el JWT/token cuando exista autenticacion.
-  // Temporalmente se puede fijar con PERFIL_MOCK_ID_USUARIO; si no existe, se resuelve desde Soporte.Usuario.
-  private mockIdUsuario = process.env.PERFIL_MOCK_ID_USUARIO?.trim() ?? '';
-
   constructor(private readonly databaseService: DatabaseService) {}
 
-  async obtenerInformacionPersonal(): Promise<InformacionPersonal> {
+  async obtenerInformacionPersonal(
+    idUsuario: string,
+  ): Promise<InformacionPersonal> {
     try {
-      const idUsuario = await this.getMockIdUsuario();
       const request = await this.databaseService.createRequest();
 
       request.input('IdUsuario', sql.UniqueIdentifier, idUsuario);
@@ -67,12 +64,12 @@ export class PerfilService {
   }
 
   async actualizarInformacionPersonal(
+    idUsuario: string,
     actualizarInformacionPersonalDto: ActualizarInformacionPersonalDto,
   ): Promise<InformacionPersonal> {
     let transaction: sql.Transaction | null = null;
 
     try {
-      const idUsuario = await this.getMockIdUsuario();
       const pool = await this.databaseService.getPool();
       transaction = new sql.Transaction(pool);
 
@@ -98,40 +95,48 @@ export class PerfilService {
           THROW 51000, 'USUARIO_NO_ENCONTRADO', 1;
         END;
 
-        MERGE Soporte.ConfiguracionUsuario AS target
-        USING (
-          SELECT
-            @IdUsuario AS IdUsuario,
-            @Pais AS Pais,
-            @CodigoPais AS CodigoPais,
-            @MonedaPrincipal AS MonedaPrincipal,
-            @ZonaHoraria AS ZonaHoraria
-        ) AS source
-          ON target.IdUsuario = source.IdUsuario
-        WHEN MATCHED THEN
-          UPDATE SET
-            Pais = source.Pais,
-            CodigoPais = source.CodigoPais,
-            MonedaPrincipal = source.MonedaPrincipal,
-            ZonaHoraria = source.ZonaHoraria,
+        IF EXISTS (
+          SELECT 1
+          FROM Soporte.ConfiguracionUsuario
+          WHERE IdUsuario = @IdUsuario
+        )
+        BEGIN
+          UPDATE Soporte.ConfiguracionUsuario
+          SET
+            Pais = @Pais,
+            CodigoPais = @CodigoPais,
+            MonedaPrincipal = @MonedaPrincipal,
+            ZonaHoraria = @ZonaHoraria,
             FechaModificacion = SYSDATETIME()
-        WHEN NOT MATCHED THEN
-          INSERT (
+          WHERE IdUsuario = @IdUsuario;
+        END
+        ELSE
+        BEGIN
+          INSERT INTO Soporte.ConfiguracionUsuario (
+            IdConfiguracion,
             IdUsuario,
             Pais,
             CodigoPais,
             MonedaPrincipal,
             ZonaHoraria,
-            FechaModificacion
+            Tema,
+            MostrarDecimales,
+            PrimerDiaSemana,
+            FechaCreacion
           )
           VALUES (
-            source.IdUsuario,
-            source.Pais,
-            source.CodigoPais,
-            source.MonedaPrincipal,
-            source.ZonaHoraria,
+            NEWID(),
+            @IdUsuario,
+            @Pais,
+            @CodigoPais,
+            @MonedaPrincipal,
+            @ZonaHoraria,
+            N'claro',
+            1,
+            N'lunes',
             SYSDATETIME()
           );
+        END;
 
         SELECT
           CONVERT(varchar(36), u.IdUsuario) AS idUsuario,
@@ -181,15 +186,15 @@ export class PerfilService {
     request.input('IdUsuario', sql.UniqueIdentifier, idUsuario);
     request.input(
       'NombreCompleto',
-      sql.NVarChar(200),
+      sql.NVarChar(150),
       informacionPersonal.nombreCompleto,
     );
     request.input(
       'FotoPerfilUrl',
-      sql.NVarChar(500),
+      sql.NVarChar(300),
       informacionPersonal.fotoPerfilUrl ?? null,
     );
-    request.input('Pais', sql.NVarChar(100), informacionPersonal.pais);
+    request.input('Pais', sql.NVarChar(80), informacionPersonal.pais);
     request.input(
       'CodigoPais',
       sql.NVarChar(10),
@@ -205,30 +210,6 @@ export class PerfilService {
       sql.NVarChar(100),
       informacionPersonal.zonaHoraria,
     );
-  }
-
-  private async getMockIdUsuario(): Promise<string> {
-    if (this.mockIdUsuario) {
-      return this.mockIdUsuario;
-    }
-
-    const request = await this.databaseService.createRequest();
-    const result = await request.query<{ idUsuario: string }>(`
-      SELECT TOP (1)
-        CONVERT(varchar(36), IdUsuario) AS idUsuario
-      FROM Soporte.Usuario
-      ORDER BY IdUsuario;
-    `);
-
-    const idUsuario = result.recordset[0]?.idUsuario;
-
-    if (!idUsuario) {
-      throw new NotFoundException('No se encontro un usuario para el perfil.');
-    }
-
-    this.mockIdUsuario = idUsuario;
-
-    return this.mockIdUsuario;
   }
 
   private async rollbackTransaction(

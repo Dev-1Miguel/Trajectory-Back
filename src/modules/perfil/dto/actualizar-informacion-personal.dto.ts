@@ -8,19 +8,19 @@ export class ActualizarInformacionPersonalDto {
   @Transform(trimString)
   @IsNotEmpty()
   @IsString()
-  @MaxLength(200)
+  @MaxLength(150)
   nombreCompleto: string;
 
   @Transform(trimString)
   @IsOptional()
   @IsString()
-  @MaxLength(500)
+  @MaxLength(300)
   fotoPerfilUrl?: string;
 
   @Transform(trimString)
   @IsNotEmpty()
   @IsString()
-  @MaxLength(100)
+  @MaxLength(80)
   pais: string;
 
   @Transform(trimString)
