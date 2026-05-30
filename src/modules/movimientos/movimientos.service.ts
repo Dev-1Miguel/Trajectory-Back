@@ -105,6 +105,7 @@ export class MovimientosService {
       sql.DateTime2,
       this.toDateOrNull(movimientoDto.fechaMovimiento),
     );
+    request.input('IdCategoria', sql.Int, movimientoDto.idCategoria ?? null);
   }
 
   private async execute(

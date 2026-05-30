@@ -13,6 +13,7 @@ interface MovimientoDashboard {
   tipoMovimiento: string;
   titulo: string;
   descripcion?: string;
+  nombreCategoria?: string | null;
   monto: number;
   cuentaOrigen?: string;
   cuentaDestino?: string;
@@ -198,6 +199,11 @@ export class DashboardService {
         'Descripcion',
         'DESCRIPCION',
       ]),
+      nombreCategoria: this.getText(record, [
+        'nombreCategoria',
+        'NombreCategoria',
+        'NOMBRECATEGORIA',
+      ]),
       monto: monto ?? 0,
       cuentaOrigen: this.getText(record, [
         'cuentaOrigen',
@@ -230,24 +236,21 @@ export class DashboardService {
   private getGastosPorTitulo(
     movimientos: MovimientoDashboard[],
   ): GastoPorTituloDashboard[] {
-    const totalsByTitle = new Map<string, GastoPorTituloDashboard>();
+    const totalsByCategory = new Map<string, GastoPorTituloDashboard>();
 
     movimientos.forEach((movimiento) => {
       if (this.normalizeTipoMovimiento(movimiento.tipoMovimiento) !== 'gasto') {
         return;
       }
 
-      const titulo = this.normalizeTituloMovimiento(
-        movimiento.titulo,
-        movimiento.descripcion,
-      );
+      const titulo = this.normalizeGastoTitulo(movimiento);
       const groupKey = this.getGroupKey(titulo);
-      const currentGroup = totalsByTitle.get(groupKey) ?? {
+      const currentGroup = totalsByCategory.get(groupKey) ?? {
         titulo,
         total: 0,
       };
 
-      totalsByTitle.set(groupKey, {
+      totalsByCategory.set(groupKey, {
         titulo: currentGroup.titulo,
         total: this.roundCurrency(
           currentGroup.total + Math.abs(movimiento.monto),
@@ -255,9 +258,22 @@ export class DashboardService {
       });
     });
 
-    return Array.from(totalsByTitle.values())
+    return Array.from(totalsByCategory.values())
       .sort((left, right) => right.total - left.total)
       .slice(0, this.gastosPorTituloLimit);
+  }
+
+  private normalizeGastoTitulo(movimiento: MovimientoDashboard): string {
+    const normalizedCategory = movimiento.nombreCategoria?.trim();
+
+    if (normalizedCategory && normalizedCategory.length > 0) {
+      return normalizedCategory;
+    }
+
+    return this.normalizeTituloMovimiento(
+      movimiento.titulo,
+      movimiento.descripcion,
+    );
   }
 
   private normalizeTituloMovimiento(titulo?: string, descripcion?: string): string {
@@ -270,7 +286,7 @@ export class DashboardService {
 
     return normalizedDescription && normalizedDescription.length > 0
       ? normalizedDescription
-      : 'Sin titulo';
+      : 'Sin categoría';
   }
 
   private getGroupKey(value: string): string {
