@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import databaseConfig from './config/database.config';
 import { DatabaseModule } from './database/database.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { CategoriasModule } from './modules/categorias/categorias.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { MovimientosModule } from './modules/movimientos/movimientos.module';
 import { PerfilModule } from './modules/perfil/perfil.module';
@@ -17,6 +18,7 @@ import { PerfilModule } from './modules/perfil/perfil.module';
     }),
     DatabaseModule,
     AuthModule,
+    CategoriasModule,
     MovimientosModule,
     DashboardModule,
     PerfilModule,

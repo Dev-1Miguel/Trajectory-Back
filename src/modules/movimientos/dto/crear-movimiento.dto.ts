@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   IsDateString,
+  IsInt,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -35,4 +36,9 @@ export class CrearMovimientoDto {
   @IsOptional()
   @IsDateString()
   fechaMovimiento?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  idCategoria?: number | null;
 }
