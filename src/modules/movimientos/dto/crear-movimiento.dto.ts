@@ -1,9 +1,11 @@
 import { Type } from 'class-transformer';
 import {
   IsDateString,
+  IsInt,
   IsNotEmpty,
   IsNumber,
   IsOptional,
+  IsPositive,
   IsString,
 } from 'class-validator';
 
@@ -35,4 +37,15 @@ export class CrearMovimientoDto {
   @IsOptional()
   @IsDateString()
   fechaMovimiento?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  idCategoria?: number | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @IsPositive()
+  idBilletera?: number | null;
 }
