@@ -53,6 +53,7 @@ export class MovimientosService {
       sql.DateTime2,
       this.toDateOrNull(filtros.fechaFin),
     );
+    request.input('IdBilletera', sql.Int, filtros.idBilletera ?? null);
 
     return this.execute(request, 'CONSULTAR');
   }
