@@ -106,6 +106,7 @@ export class MovimientosService {
       this.toDateOrNull(movimientoDto.fechaMovimiento),
     );
     request.input('IdCategoria', sql.Int, movimientoDto.idCategoria ?? null);
+    request.input('IdBilletera', sql.Int, movimientoDto.idBilletera ?? null);
   }
 
   private async execute(

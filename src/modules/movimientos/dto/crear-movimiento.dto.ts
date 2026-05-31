@@ -5,6 +5,7 @@ import {
   IsNotEmpty,
   IsNumber,
   IsOptional,
+  IsPositive,
   IsString,
 } from 'class-validator';
 
@@ -41,4 +42,10 @@ export class CrearMovimientoDto {
   @Type(() => Number)
   @IsInt()
   idCategoria?: number | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @IsPositive()
+  idBilletera?: number | null;
 }
