@@ -54,6 +54,7 @@ export class DashboardService {
     const response = await this.movimientosService.consultar({
       fechaInicio: this.formatDateTime(rango.inicio),
       fechaFin: this.formatDateTime(rango.fin),
+      idBilletera: filtros.idBilletera,
     });
 
     const movimientos = response.data
