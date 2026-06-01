@@ -9,8 +9,11 @@ import {
   Put,
   Query,
   Req,
+  UnauthorizedException,
+  UseGuards,
 } from '@nestjs/common';
 
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AuthenticatedRequest } from '../auth/types/authenticated-user.type';
 import { BilleterasService } from './billeteras.service';
 import { ActualizarBilleteraDto } from './dto/actualizar-billetera.dto';
@@ -19,8 +22,7 @@ import { ConsultarBilleteraDto } from './dto/consultar-billetera.dto';
 import { CrearBilleteraDto } from './dto/crear-billetera.dto';
 import { MarcarPrincipalBilleteraDto } from './dto/marcar-principal-billetera.dto';
 
-const LOCAL_DEVELOPMENT_USER_ID = 'FE391053-CD3E-4050-A053-C52D6608C2EC';
-
+@UseGuards(JwtAuthGuard)
 @Controller('billeteras')
 export class BilleterasController {
   constructor(private readonly billeterasService: BilleterasService) {}
@@ -86,6 +88,12 @@ export class BilleterasController {
   }
 
   private getIdUsuario(request: AuthenticatedRequest): string {
-    return request.user?.idUsuario ?? LOCAL_DEVELOPMENT_USER_ID;
+    const idUsuario = request.user?.idUsuario;
+
+    if (!idUsuario) {
+      throw new UnauthorizedException('Usuario no autenticado.');
+    }
+
+    return idUsuario;
   }
 }
