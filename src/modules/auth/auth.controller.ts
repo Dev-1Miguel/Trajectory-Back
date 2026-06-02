@@ -3,6 +3,7 @@ import type { Request } from 'express';
 
 import { AuthService } from './auth.service';
 import { CambiarPasswordDto } from './dto/cambiar-password.dto';
+import { CerrarSesionesDto } from './dto/cerrar-sesiones.dto';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -32,6 +33,12 @@ export class AuthController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Get('sesiones')
+  consultarSesiones(@Req() request: AuthenticatedRequest) {
+    return this.authService.consultarSesiones(request.user.idUsuario);
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Patch('password')
   cambiarPassword(
     @Req() request: AuthenticatedRequest,
@@ -41,5 +48,23 @@ export class AuthController {
       request.user.idUsuario,
       cambiarPasswordDto,
     );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('sesiones/cerrar')
+  cerrarSesiones(
+    @Req() request: AuthenticatedRequest,
+    @Body() cerrarSesionesDto: CerrarSesionesDto,
+  ) {
+    return this.authService.cerrarSesiones(
+      request.user.idUsuario,
+      cerrarSesionesDto,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('sesiones/cerrar-todas')
+  cerrarTodasSesiones(@Req() request: AuthenticatedRequest) {
+    return this.authService.cerrarTodasSesiones(request.user.idUsuario);
   }
 }

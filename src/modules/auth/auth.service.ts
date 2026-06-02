@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto';
 
 import { DatabaseService } from '../../database/database.service';
 import { CambiarPasswordDto } from './dto/cambiar-password.dto';
+import { CerrarSesionesDto } from './dto/cerrar-sesiones.dto';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { AuthenticatedUser } from './types/authenticated-user.type';
@@ -43,6 +44,14 @@ export interface RegisterResponse {
 }
 
 export interface CambiarPasswordResponse {
+  mensaje: string;
+}
+
+export interface ConsultarSesionesResponse {
+  sesiones: Record<string, unknown>[];
+}
+
+export interface CerrarSesionesResponse {
   mensaje: string;
 }
 
@@ -291,6 +300,70 @@ export class AuthService {
     }
   }
 
+  async consultarSesiones(
+    idUsuario: string,
+  ): Promise<ConsultarSesionesResponse> {
+    try {
+      const request = await this.databaseService.createRequest();
+
+      request.input('Accion', sql.VarChar(30), 'CONSULTAR_SESIONES');
+      request.input('IdUsuario', sql.UniqueIdentifier, idUsuario);
+
+      const result = await request.execute<Record<string, unknown>>(
+        this.usuarioStoredProcedureName,
+      );
+
+      return {
+        sesiones: result.recordset ? [...result.recordset] : [],
+      };
+    } catch (error: unknown) {
+      this.handleError(error, 'consultar sesiones');
+    }
+  }
+
+  async cerrarSesiones(
+    idUsuario: string,
+    cerrarSesionesDto: CerrarSesionesDto,
+  ): Promise<CerrarSesionesResponse> {
+    try {
+      const idSesiones = this.normalizarIdSesiones(
+        cerrarSesionesDto.idSesiones,
+      );
+      const request = await this.databaseService.createRequest();
+
+      request.input('Accion', sql.VarChar(30), 'CERRAR_SESIONES');
+      request.input('IdUsuario', sql.UniqueIdentifier, idUsuario);
+      request.input('IdSesiones', sql.VarChar(sql.MAX), idSesiones.join(','));
+
+      await request.execute(this.usuarioStoredProcedureName);
+
+      return {
+        mensaje: 'Sesiones cerradas correctamente.',
+      };
+    } catch (error: unknown) {
+      this.handleError(error, 'cerrar sesiones');
+    }
+  }
+
+  async cerrarTodasSesiones(
+    idUsuario: string,
+  ): Promise<CerrarSesionesResponse> {
+    try {
+      const request = await this.databaseService.createRequest();
+
+      request.input('Accion', sql.VarChar(30), 'CERRAR_TODAS_SESIONES');
+      request.input('IdUsuario', sql.UniqueIdentifier, idUsuario);
+
+      await request.execute(this.usuarioStoredProcedureName);
+
+      return {
+        mensaje: 'Sesiones cerradas correctamente.',
+      };
+    } catch (error: unknown) {
+      this.handleError(error, 'cerrar todas las sesiones');
+    }
+  }
+
   me(usuario: AuthenticatedUser): AuthenticatedUser {
     return usuario;
   }
@@ -528,6 +601,16 @@ export class AuthService {
 
   private isBlank(value: string): boolean {
     return value.trim().length === 0;
+  }
+
+  private normalizarIdSesiones(idSesiones: string[]): string[] {
+    const idsNormalizados = idSesiones.map((idSesion) => idSesion.trim());
+
+    if (idsNormalizados.some((idSesion) => this.isBlank(idSesion))) {
+      throw new BadRequestException('No se permiten sesiones vacias.');
+    }
+
+    return [...new Set(idsNormalizados)];
   }
 
   private async rollbackTransaction(
