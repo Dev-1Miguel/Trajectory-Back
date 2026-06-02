@@ -1,9 +1,12 @@
 import {
+  BadRequestException,
   ConflictException,
+  ForbiddenException,
   HttpException,
   Injectable,
   InternalServerErrorException,
   Logger,
+  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -12,6 +15,7 @@ import * as sql from 'mssql/msnodesqlv8';
 import { randomUUID } from 'node:crypto';
 
 import { DatabaseService } from '../../database/database.service';
+import { CambiarPasswordDto } from './dto/cambiar-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { AuthenticatedUser } from './types/authenticated-user.type';
@@ -38,11 +42,16 @@ export interface RegisterResponse {
   usuario: AuthenticatedUser;
 }
 
+export interface CambiarPasswordResponse {
+  mensaje: string;
+}
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
   private readonly passwordHashSaltRounds = 10;
   private readonly tokenHashSaltRounds = 10;
+  private readonly usuarioStoredProcedureName = 'Soporte.SP_Usuario';
 
   constructor(
     private readonly databaseService: DatabaseService,
@@ -225,6 +234,63 @@ export class AuthService {
     }
   }
 
+  async cambiarPassword(
+    idUsuario: string,
+    cambiarPasswordDto: CambiarPasswordDto,
+  ): Promise<CambiarPasswordResponse> {
+    try {
+      this.validarPasswordDto(cambiarPasswordDto);
+
+      const usuario = await this.buscarUsuarioPorId(idUsuario);
+
+      if (!usuario) {
+        throw new NotFoundException('No se encontro el usuario solicitado.');
+      }
+
+      if (!this.isUsuarioActivo(usuario.activo)) {
+        throw new ForbiddenException('Usuario inactivo.');
+      }
+
+      const passwordActualValida = await this.compararPassword(
+        cambiarPasswordDto.passwordActual,
+        usuario.passwordHash,
+      );
+
+      if (!passwordActualValida) {
+        throw new BadRequestException('La contraseña actual no es correcta.');
+      }
+
+      const passwordNuevaEsActual = await this.compararPassword(
+        cambiarPasswordDto.passwordNueva,
+        usuario.passwordHash,
+      );
+
+      if (passwordNuevaEsActual) {
+        throw new BadRequestException(
+          'La nueva password debe ser diferente a la actual.',
+        );
+      }
+
+      const passwordHashNuevo = await bcrypt.hash(
+        cambiarPasswordDto.passwordNueva,
+        this.passwordHashSaltRounds,
+      );
+      const request = await this.databaseService.createRequest();
+
+      request.input('Accion', sql.VarChar(30), 'CAMBIAR_PASSWORD');
+      request.input('IdUsuario', sql.UniqueIdentifier, usuario.idUsuario);
+      request.input('PasswordHashNuevo', sql.VarChar(255), passwordHashNuevo);
+
+      await request.execute(this.usuarioStoredProcedureName);
+
+      return {
+        mensaje: 'Contraseña actualizada correctamente.',
+      };
+    } catch (error: unknown) {
+      this.handleError(error, 'cambiar password');
+    }
+  }
+
   me(usuario: AuthenticatedUser): AuthenticatedUser {
     return usuario;
   }
@@ -245,6 +311,27 @@ export class AuthService {
         Activo AS activo
       FROM Soporte.Usuario
       WHERE Correo = @Correo;
+    `);
+
+    return result.recordset[0] ?? null;
+  }
+
+  private async buscarUsuarioPorId(
+    idUsuario: string,
+  ): Promise<UsuarioAutenticacionRow | null> {
+    const request = await this.databaseService.createRequest();
+
+    request.input('IdUsuario', sql.UniqueIdentifier, idUsuario);
+
+    const result = await request.query<UsuarioAutenticacionRow>(`
+      SELECT TOP (1)
+        CONVERT(varchar(36), IdUsuario) AS idUsuario,
+        NombreCompleto AS nombreCompleto,
+        Correo AS correo,
+        PasswordHash AS passwordHash,
+        Activo AS activo
+      FROM Soporte.Usuario
+      WHERE IdUsuario = @IdUsuario;
     `);
 
     return result.recordset[0] ?? null;
@@ -290,6 +377,32 @@ export class AuthService {
         }`,
       );
       return false;
+    }
+  }
+
+  private validarPasswordDto(cambiarPasswordDto: CambiarPasswordDto): void {
+    const passwordActual = cambiarPasswordDto.passwordActual;
+    const passwordNueva = cambiarPasswordDto.passwordNueva;
+    const confirmarPasswordNueva = cambiarPasswordDto.confirmarPasswordNueva;
+
+    if (
+      this.isBlank(passwordActual) ||
+      this.isBlank(passwordNueva) ||
+      this.isBlank(confirmarPasswordNueva)
+    ) {
+      throw new BadRequestException('Las passwords no pueden estar vacias.');
+    }
+
+    if (passwordNueva !== confirmarPasswordNueva) {
+      throw new BadRequestException(
+        'passwordNueva y confirmarPasswordNueva deben coincidir.',
+      );
+    }
+
+    if (passwordNueva.length < 8) {
+      throw new BadRequestException(
+        'La nueva password debe tener al menos 8 caracteres.',
+      );
     }
   }
 
@@ -411,6 +524,10 @@ export class AuthService {
     }
 
     return value.slice(0, maxLength);
+  }
+
+  private isBlank(value: string): boolean {
+    return value.trim().length === 0;
   }
 
   private async rollbackTransaction(
