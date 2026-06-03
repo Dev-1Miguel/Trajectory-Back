@@ -34,6 +34,11 @@ interface LoginMetadata {
   ip?: string;
 }
 
+interface SesionTokenRow {
+  idSesion: string;
+  tokenHash: string;
+}
+
 export interface LoginResponse {
   accessToken: string;
   usuario: AuthenticatedUser;
@@ -44,6 +49,10 @@ export interface RegisterResponse {
 }
 
 export interface CambiarPasswordResponse {
+  mensaje: string;
+}
+
+export interface LogoutResponse {
   mensaje: string;
 }
 
@@ -60,7 +69,6 @@ export class AuthService {
   private readonly logger = new Logger(AuthService.name);
   private readonly passwordHashSaltRounds = 10;
   private readonly tokenHashSaltRounds = 10;
-  private readonly usuarioStoredProcedureName = 'Soporte.SP_Usuario';
 
   constructor(
     private readonly databaseService: DatabaseService,
@@ -247,6 +255,8 @@ export class AuthService {
     idUsuario: string,
     cambiarPasswordDto: CambiarPasswordDto,
   ): Promise<CambiarPasswordResponse> {
+    let transaction: sql.Transaction | null = null;
+
     try {
       this.validarPasswordDto(cambiarPasswordDto);
 
@@ -284,18 +294,92 @@ export class AuthService {
         cambiarPasswordDto.passwordNueva,
         this.passwordHashSaltRounds,
       );
-      const request = await this.databaseService.createRequest();
 
-      request.input('Accion', sql.VarChar(30), 'CAMBIAR_PASSWORD');
-      request.input('IdUsuario', sql.UniqueIdentifier, usuario.idUsuario);
-      request.input('PasswordHashNuevo', sql.VarChar(255), passwordHashNuevo);
+      const pool = await this.databaseService.getPool();
+      transaction = new sql.Transaction(pool);
 
-      await request.execute(this.usuarioStoredProcedureName);
+      await transaction.begin();
+
+      const updatePasswordRequest = new sql.Request(transaction);
+
+      updatePasswordRequest.input(
+        'IdUsuario',
+        sql.UniqueIdentifier,
+        usuario.idUsuario,
+      );
+      updatePasswordRequest.input(
+        'PasswordHashNuevo',
+        sql.NVarChar(255),
+        passwordHashNuevo,
+      );
+
+      const updatePasswordResult = await updatePasswordRequest.query(`
+        UPDATE Soporte.Usuario
+        SET
+          PasswordHash = @PasswordHashNuevo,
+          FechaModificacion = SYSDATETIME()
+        WHERE IdUsuario = @IdUsuario
+          AND Activo = 1;
+      `);
+
+      if ((updatePasswordResult.rowsAffected[0] ?? 0) === 0) {
+        throw new NotFoundException('No se encontro el usuario solicitado.');
+      }
+
+      const cerrarSesionesRequest = new sql.Request(transaction);
+      cerrarSesionesRequest.input(
+        'IdUsuario',
+        sql.UniqueIdentifier,
+        usuario.idUsuario,
+      );
+
+      await cerrarSesionesRequest.query(`
+        UPDATE Soporte.Sesion
+        SET Activa = 0
+        WHERE IdUsuario = @IdUsuario
+          AND Activa = 1;
+      `);
+
+      const auditRequest = new sql.Request(transaction);
+      auditRequest.input('IdUsuario', sql.UniqueIdentifier, idUsuario);
+
+      await auditRequest.query(`
+        INSERT INTO Soporte.Auditoria (
+          IdAuditoria,
+          IdUsuario,
+          Modulo,
+          Accion,
+          TablaAfectada,
+          IdRegistroAfectado,
+          Descripcion,
+          ValorAnterior,
+          ValorNuevo,
+          FechaRegistro
+        )
+        VALUES (
+          NEWID(),
+          @IdUsuario,
+          N'AUTH',
+          N'CAMBIAR_PASSWORD',
+          N'Soporte.Usuario',
+          CONVERT(nvarchar(100), @IdUsuario),
+          N'Contraseña cambiada correctamente',
+          NULL,
+          NULL,
+          SYSDATETIME()
+        );
+      `);
+
+      await transaction.commit();
 
       return {
         mensaje: 'Contraseña actualizada correctamente.',
       };
     } catch (error: unknown) {
+      if (transaction) {
+        await this.rollbackTransaction(transaction);
+      }
+
       this.handleError(error, 'cambiar password');
     }
   }
@@ -306,12 +390,26 @@ export class AuthService {
     try {
       const request = await this.databaseService.createRequest();
 
-      request.input('Accion', sql.VarChar(30), 'CONSULTAR_SESIONES');
       request.input('IdUsuario', sql.UniqueIdentifier, idUsuario);
 
-      const result = await request.execute<Record<string, unknown>>(
-        this.usuarioStoredProcedureName,
-      );
+      const result = await request.query<Record<string, unknown>>(`
+        SELECT
+          IdSesion,
+          IdUsuario,
+          Dispositivo,
+          Ip,
+          FechaInicio,
+          FechaExpiracion,
+          Activa,
+          CASE
+            WHEN Activa = 1 AND FechaExpiracion >= SYSDATETIME() THEN 'ACTIVA'
+            WHEN Activa = 1 AND FechaExpiracion < SYSDATETIME() THEN 'EXPIRADA'
+            ELSE 'CERRADA'
+          END AS Estado
+        FROM Soporte.Sesion
+        WHERE IdUsuario = @IdUsuario
+        ORDER BY FechaInicio DESC;
+      `);
 
       return {
         sesiones: result.recordset ? [...result.recordset] : [],
@@ -325,22 +423,75 @@ export class AuthService {
     idUsuario: string,
     cerrarSesionesDto: CerrarSesionesDto,
   ): Promise<CerrarSesionesResponse> {
+    let transaction: sql.Transaction | null = null;
+
     try {
       const idSesiones = this.normalizarIdSesiones(
         cerrarSesionesDto.idSesiones,
       );
-      const request = await this.databaseService.createRequest();
+      const pool = await this.databaseService.getPool();
+      transaction = new sql.Transaction(pool);
 
-      request.input('Accion', sql.VarChar(30), 'CERRAR_SESIONES');
+      await transaction.begin();
+
+      const request = new sql.Request(transaction);
       request.input('IdUsuario', sql.UniqueIdentifier, idUsuario);
-      request.input('IdSesiones', sql.VarChar(sql.MAX), idSesiones.join(','));
+      request.input('IdSesiones', sql.NVarChar(sql.MAX), idSesiones.join(','));
 
-      await request.execute(this.usuarioStoredProcedureName);
+      await request.query(`
+        DECLARE @SesionesSeleccionadas TABLE (
+          IdSesion UNIQUEIDENTIFIER NOT NULL
+        );
+
+        INSERT INTO @SesionesSeleccionadas (IdSesion)
+        SELECT DISTINCT TRY_CONVERT(UNIQUEIDENTIFIER, LTRIM(RTRIM(value)))
+        FROM STRING_SPLIT(@IdSesiones, ',')
+        WHERE TRY_CONVERT(UNIQUEIDENTIFIER, LTRIM(RTRIM(value))) IS NOT NULL;
+
+        UPDATE s
+        SET Activa = 0
+        FROM Soporte.Sesion s
+        INNER JOIN @SesionesSeleccionadas ss
+          ON ss.IdSesion = s.IdSesion
+        WHERE s.IdUsuario = @IdUsuario
+          AND s.Activa = 1;
+
+        INSERT INTO Soporte.Auditoria (
+          IdAuditoria,
+          IdUsuario,
+          Modulo,
+          Accion,
+          TablaAfectada,
+          IdRegistroAfectado,
+          Descripcion,
+          ValorAnterior,
+          ValorNuevo,
+          FechaRegistro
+        )
+        VALUES (
+          NEWID(),
+          @IdUsuario,
+          N'AUTH',
+          N'LOGOUT',
+          N'Soporte.Sesion',
+          @IdSesiones,
+          N'Sesiones seleccionadas cerradas por el usuario',
+          N'Activa = 1',
+          N'Activa = 0',
+          SYSDATETIME()
+        );
+      `);
+
+      await transaction.commit();
 
       return {
         mensaje: 'Sesiones cerradas correctamente.',
       };
     } catch (error: unknown) {
+      if (transaction) {
+        await this.rollbackTransaction(transaction);
+      }
+
       this.handleError(error, 'cerrar sesiones');
     }
   }
@@ -348,18 +499,59 @@ export class AuthService {
   async cerrarTodasSesiones(
     idUsuario: string,
   ): Promise<CerrarSesionesResponse> {
-    try {
-      const request = await this.databaseService.createRequest();
+    let transaction: sql.Transaction | null = null;
 
-      request.input('Accion', sql.VarChar(30), 'CERRAR_TODAS_SESIONES');
+    try {
+      const pool = await this.databaseService.getPool();
+      transaction = new sql.Transaction(pool);
+
+      await transaction.begin();
+
+      const request = new sql.Request(transaction);
       request.input('IdUsuario', sql.UniqueIdentifier, idUsuario);
 
-      await request.execute(this.usuarioStoredProcedureName);
+      await request.query(`
+        UPDATE Soporte.Sesion
+        SET Activa = 0
+        WHERE IdUsuario = @IdUsuario
+          AND Activa = 1;
+
+        INSERT INTO Soporte.Auditoria (
+          IdAuditoria,
+          IdUsuario,
+          Modulo,
+          Accion,
+          TablaAfectada,
+          IdRegistroAfectado,
+          Descripcion,
+          ValorAnterior,
+          ValorNuevo,
+          FechaRegistro
+        )
+        VALUES (
+          NEWID(),
+          @IdUsuario,
+          N'AUTH',
+          N'LOGOUT',
+          N'Soporte.Sesion',
+          CONVERT(nvarchar(100), @IdUsuario),
+          N'Todas las sesiones activas fueron cerradas',
+          N'Activa = 1',
+          N'Activa = 0',
+          SYSDATETIME()
+        );
+      `);
+
+      await transaction.commit();
 
       return {
         mensaje: 'Sesiones cerradas correctamente.',
       };
     } catch (error: unknown) {
+      if (transaction) {
+        await this.rollbackTransaction(transaction);
+      }
+
       this.handleError(error, 'cerrar todas las sesiones');
     }
   }
@@ -641,5 +833,128 @@ export class AuthService {
     throw new InternalServerErrorException(
       'No fue posible procesar la autenticacion.',
     );
+  }
+
+  async logout(
+    idUsuario: string,
+    authorizationHeader: string | undefined,
+  ): Promise<LogoutResponse> {
+    let transaction: sql.Transaction | null = null;
+
+    try {
+      const accessToken = this.extraerBearerToken(authorizationHeader);
+      const pool = await this.databaseService.getPool();
+      transaction = new sql.Transaction(pool);
+
+      await transaction.begin();
+
+      const sesion = await this.buscarSesionActivaPorAccessToken(
+        transaction,
+        idUsuario,
+        accessToken,
+      );
+
+      if (!sesion) {
+        throw new UnauthorizedException('Sesion no encontrada o inactiva.');
+      }
+
+      const cerrarSesionRequest = new sql.Request(transaction);
+      cerrarSesionRequest.input('IdUsuario', sql.UniqueIdentifier, idUsuario);
+      cerrarSesionRequest.input(
+        'IdSesion',
+        sql.UniqueIdentifier,
+        sesion.idSesion,
+      );
+
+      await cerrarSesionRequest.query(`
+        UPDATE Soporte.Sesion
+        SET Activo = 0
+        WHERE IdSesion = @IdSesion
+          AND IdUsuario = @IdUsuario
+          AND Activa = 1;
+      `);
+
+      const auditRequest = new sql.Request(transaction);
+      auditRequest.input('IdUsuario', sql.UniqueIdentifier, idUsuario);
+      auditRequest.input('IdSesion', sql.UniqueIdentifier, sesion.idSesion);
+
+      await auditRequest.query(`
+        INSERT INTO Soporte.Auditoria (
+          IdAuditoria,
+          IdUsuario,
+          Modulo,
+          Accion,
+          TablaAfectada,
+          IdRegistroAfectado,
+          Descripcion,
+          ValorAnterior,
+          ValorNuevo,
+          FechaRegistro
+        )
+        VALUES (
+          NEWID(),
+          @IdUsuario,
+          N'AUTH',
+          N'LOGOUT',
+          N'Soporte.Sesion',
+          CONVERT(nvarchar(100), @IdSesion),
+          N'Cierre de sesion exitoso',
+          N'Activa = 1',
+          N'Activa = 0',
+          SYSDATETIME()
+        );
+      `);
+
+      await transaction.commit();
+
+      return {
+        mensaje: 'Sesión cerrada correctamente.',
+      };
+    } catch (error: unknown) {
+      if (transaction) {
+        await this.rollbackTransaction(transaction);
+      }
+
+      this.handleError(error, 'cerrar sesion');
+    }
+  }
+
+  private extraerBearerToken(authorizationHeader: string | undefined): string {
+    const [tipo, token] = authorizationHeader?.split(' ') ?? [];
+
+    if (tipo !== 'Bearer' || this.isBlank(token ?? '')) {
+      throw new UnauthorizedException('Token de autorizacion invalido.');
+    }
+
+    return token;
+  }
+
+  private async buscarSesionActivaPorAccessToken(
+    transaction: sql.Transaction,
+    idUsuario: string,
+    accessToken: string,
+  ): Promise<SesionTokenRow | null> {
+    const request = new sql.Request(transaction);
+    request.input('IdUsuario', sql.UniqueIdentifier, idUsuario);
+
+    const result = await request.query<SesionTokenRow>(`
+      SELECT
+        CONVERT(varchar(36), IdSesion) AS idSesion,
+        TokenHash AS tokenHash
+      FROM Soporte.Sesion
+      WHERE IdUsuario = @IdUsuario
+        AND Activa = 1
+        AND FechaExpiracion >= SYSDATETIME()
+        AND TokenHash IS NOT NULL
+      ORDER BY FechaInicio DESC;
+    `);
+
+    for (const sesion of result.recordset) {
+      if (await bcrypt.compare(accessToken, sesion.tokenHash)) {
+        return sesion;
+      }
+    }
+
+    return null;
   }
 }

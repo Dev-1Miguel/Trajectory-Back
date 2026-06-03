@@ -67,4 +67,13 @@ export class AuthController {
   cerrarTodasSesiones(@Req() request: AuthenticatedRequest) {
     return this.authService.cerrarTodasSesiones(request.user.idUsuario);
   }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('logout')
+  logout(@Req() request: AuthenticatedRequest) {
+    return this.authService.logout(
+      request.user.idUsuario,
+      request.get('authorization'),
+    );
+  }
 }
