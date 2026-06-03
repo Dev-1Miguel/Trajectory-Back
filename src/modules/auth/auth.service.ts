@@ -868,7 +868,7 @@ export class AuthService {
 
       await cerrarSesionRequest.query(`
         UPDATE Soporte.Sesion
-        SET Activo = 0
+        SET Activa = 0
         WHERE IdSesion = @IdSesion
           AND IdUsuario = @IdUsuario
           AND Activa = 1;
