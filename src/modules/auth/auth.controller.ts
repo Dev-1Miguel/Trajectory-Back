@@ -1,17 +1,24 @@
 import { Body, Controller, Get, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 
+import { MailService } from '../mail/mail.service';
 import { AuthService } from './auth.service';
 import { CambiarPasswordDto } from './dto/cambiar-password.dto';
 import { CerrarSesionesDto } from './dto/cerrar-sesiones.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+import { TestEmailDto } from './dto/test-email.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { AuthenticatedRequest } from './types/authenticated-user.type';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly mailService: MailService,
+  ) {}
 
   @Post('login')
   login(@Body() loginDto: LoginDto, @Req() request: Request) {
@@ -24,6 +31,25 @@ export class AuthController {
   @Post('register')
   register(@Body() registerDto: RegisterDto) {
     return this.authService.register(registerDto);
+  }
+
+  @Post('test-email')
+  async enviarCorreoPrueba(@Body() testEmailDto: TestEmailDto) {
+    await this.mailService.enviarCorreoPrueba(testEmailDto.correo);
+
+    return {
+      mensaje: 'Correo enviado correctamente.',
+    };
+  }
+
+  @Post('forgot-password')
+  forgotPassword(@Body() forgotPasswordDto: ForgotPasswordDto) {
+    return this.authService.forgotPassword(forgotPasswordDto);
+  }
+
+  @Post('reset-password')
+  resetPassword(@Body() resetPasswordDto: ResetPasswordDto) {
+    return this.authService.resetPassword(resetPasswordDto);
   }
 
   @UseGuards(JwtAuthGuard)
