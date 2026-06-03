@@ -22,22 +22,26 @@ export class MovimientosService {
   constructor(private readonly databaseService: DatabaseService) {}
 
   async crear(
+    idUsuario: string,
     crearMovimientoDto: CrearMovimientoDto,
   ): Promise<StoredProcedureResponse> {
     const request = await this.databaseService.createRequest();
 
     this.addActionInput(request, 'CREAR');
+    request.input('IdUsuario', sql.UniqueIdentifier, idUsuario);
     this.addMovimientoInputs(request, crearMovimientoDto);
 
     return this.execute(request, 'CREAR');
   }
 
   async consultar(
+    idUsuario: string,
     filtros: ConsultarMovimientoDto,
   ): Promise<StoredProcedureResponse> {
     const request = await this.databaseService.createRequest();
 
     this.addActionInput(request, 'CONSULTAR');
+    request.input('IdUsuario', sql.UniqueIdentifier, idUsuario);
     request.input(
       'TipoMovimiento',
       sql.NVarChar(50),
@@ -60,12 +64,14 @@ export class MovimientosService {
 
   async actualizar(
     id: number,
+    idUsuario: string,
     actualizarMovimientoDto: ActualizarMovimientoDto,
   ): Promise<StoredProcedureResponse> {
     const request = await this.databaseService.createRequest();
 
     this.addActionInput(request, 'ACTUALIZAR');
     request.input('IdMovimiento', sql.Int, id);
+    request.input('IdUsuario', sql.UniqueIdentifier, idUsuario);
     this.addMovimientoInputs(request, actualizarMovimientoDto);
 
     return this.execute(request, 'ACTUALIZAR');

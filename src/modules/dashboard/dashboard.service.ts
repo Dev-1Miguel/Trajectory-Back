@@ -48,14 +48,18 @@ export class DashboardService {
   constructor(private readonly movimientosService: MovimientosService) {}
 
   async obtenerResumen(
+    idUsuario: string,
     filtros: ConsultarResumenDashboardDto,
   ): Promise<ResumenDashboard> {
     const rango = this.resolveDateRange(filtros);
-    const response = await this.movimientosService.consultar({
-      fechaInicio: this.formatDateTime(rango.inicio),
-      fechaFin: this.formatDateTime(rango.fin),
-      idBilletera: filtros.idBilletera,
-    });
+    const response = await this.movimientosService.consultar(
+      idUsuario,
+      {
+        fechaInicio: this.formatDateTime(rango.inicio),
+        fechaFin: this.formatDateTime(rango.fin),
+        idBilletera: filtros.idBilletera,
+      },
+    );
 
     const movimientos = response.data
       .map((record) => this.toMovimientoDashboard(record))
