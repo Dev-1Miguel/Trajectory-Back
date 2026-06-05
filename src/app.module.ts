@@ -9,6 +9,7 @@ import { CategoriasModule } from './modules/categorias/categorias.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { MovimientosModule } from './modules/movimientos/movimientos.module';
 import { PerfilModule } from './modules/perfil/perfil.module';
+import { ReportesModule } from './modules/reportes/reportes.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { PerfilModule } from './modules/perfil/perfil.module';
     MovimientosModule,
     DashboardModule,
     PerfilModule,
+    ReportesModule,
   ],
 })
 export class AppModule {}
