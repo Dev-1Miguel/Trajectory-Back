@@ -12,13 +12,16 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import * as sql from 'mssql/msnodesqlv8';
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 
 import { DatabaseService } from '../../database/database.service';
+import { MailService } from '../mail/mail.service';
 import { CambiarPasswordDto } from './dto/cambiar-password.dto';
 import { CerrarSesionesDto } from './dto/cerrar-sesiones.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { AuthenticatedUser } from './types/authenticated-user.type';
 
 interface UsuarioAutenticacionRow {
@@ -39,6 +42,12 @@ interface SesionTokenRow {
   tokenHash: string;
 }
 
+interface RecuperacionPasswordRow {
+  idRecuperacion: string;
+  codigoHash: string;
+  intentosFallidos: number;
+}
+
 export interface LoginResponse {
   accessToken: string;
   usuario: AuthenticatedUser;
@@ -49,6 +58,14 @@ export interface RegisterResponse {
 }
 
 export interface CambiarPasswordResponse {
+  mensaje: string;
+}
+
+export interface ForgotPasswordResponse {
+  mensaje: string;
+}
+
+export interface ResetPasswordResponse {
   mensaje: string;
 }
 
@@ -69,10 +86,18 @@ export class AuthService {
   private readonly logger = new Logger(AuthService.name);
   private readonly passwordHashSaltRounds = 10;
   private readonly tokenHashSaltRounds = 10;
+  private readonly recoveryCodeSaltRounds = 10;
+  private readonly recoveryCodeExpirationMinutes = 10;
+  private readonly recoveryMaxFailedAttempts = 5;
+  private readonly forgotPasswordMensaje =
+    'Si el correo está registrado, enviaremos un código de recuperación.';
+  private readonly resetPasswordCodigoInvalidoMensaje =
+    'Código inválido o expirado.';
 
   constructor(
     private readonly databaseService: DatabaseService,
     private readonly jwtService: JwtService,
+    private readonly mailService: MailService,
   ) {}
 
   async login(
@@ -248,6 +273,265 @@ export class AuthService {
       }
 
       this.handleError(error, 'registrar usuario');
+    }
+  }
+
+  async forgotPassword(
+    forgotPasswordDto: ForgotPasswordDto,
+  ): Promise<ForgotPasswordResponse> {
+    let transaction: sql.Transaction | null = null;
+
+    try {
+      const usuario = await this.buscarUsuarioPorCorreo(forgotPasswordDto.correo);
+
+      if (!usuario || !this.isUsuarioActivo(usuario.activo)) {
+        return {
+          mensaje: this.forgotPasswordMensaje,
+        };
+      }
+
+      const codigo = this.generarCodigoRecuperacion();
+      const codigoHash = await bcrypt.hash(
+        codigo,
+        this.recoveryCodeSaltRounds,
+      );
+      const fechaExpiracion = new Date(
+        Date.now() + this.recoveryCodeExpirationMinutes * 60 * 1000,
+      );
+      const pool = await this.databaseService.getPool();
+      transaction = new sql.Transaction(pool);
+
+      await transaction.begin();
+
+      const request = new sql.Request(transaction);
+      request.input('IdUsuario', sql.UniqueIdentifier, usuario.idUsuario);
+      request.input('CodigoHash', sql.NVarChar(sql.MAX), codigoHash);
+      request.input('FechaExpiracion', sql.DateTime2, fechaExpiracion);
+
+      await request.query(`
+        UPDATE Soporte.RecuperacionPassword
+        SET
+          Usado = 1,
+          FechaUso = COALESCE(FechaUso, SYSDATETIME())
+        WHERE IdUsuario = @IdUsuario
+          AND Usado = 0
+          AND FechaExpiracion >= SYSDATETIME();
+
+        INSERT INTO Soporte.RecuperacionPassword (
+          IdRecuperacion,
+          IdUsuario,
+          CodigoHash,
+          FechaExpiracion,
+          Usado,
+          IntentosFallidos,
+          FechaCreacion
+        )
+        VALUES (
+          NEWID(),
+          @IdUsuario,
+          @CodigoHash,
+          @FechaExpiracion,
+          0,
+          0,
+          SYSDATETIME()
+        );
+
+        INSERT INTO Soporte.Auditoria (
+          IdAuditoria,
+          IdUsuario,
+          Modulo,
+          Accion,
+          TablaAfectada,
+          IdRegistroAfectado,
+          Descripcion,
+          ValorAnterior,
+          ValorNuevo,
+          FechaRegistro
+        )
+        VALUES (
+          NEWID(),
+          @IdUsuario,
+          N'AUTH',
+          N'FORGOT_PASSWORD_REQUEST',
+          N'Soporte.RecuperacionPassword',
+          CONVERT(nvarchar(100), @IdUsuario),
+          N'Solicitud de recuperacion de password',
+          NULL,
+          NULL,
+          SYSDATETIME()
+        );
+      `);
+
+      await transaction.commit();
+      transaction = null;
+
+      try {
+        await this.mailService.enviarCodigoRecuperacion(
+          usuario.correo,
+          usuario.nombreCompleto || 'usuario',
+          codigo,
+        );
+      } catch (error: unknown) {
+        this.logger.warn(
+          `No fue posible enviar el correo de recuperacion: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+
+      return {
+        mensaje: this.forgotPasswordMensaje,
+      };
+    } catch (error: unknown) {
+      if (transaction) {
+        await this.rollbackTransaction(transaction);
+      }
+
+      this.handleError(error, 'solicitar recuperacion de password');
+    }
+  }
+
+  async resetPassword(
+    resetPasswordDto: ResetPasswordDto,
+  ): Promise<ResetPasswordResponse> {
+    let transaction: sql.Transaction | null = null;
+
+    try {
+      this.validarResetPasswordDto(resetPasswordDto);
+
+      const usuario = await this.buscarUsuarioPorCorreo(resetPasswordDto.correo);
+
+      if (!usuario || !this.isUsuarioActivo(usuario.activo)) {
+        throw new BadRequestException(this.resetPasswordCodigoInvalidoMensaje);
+      }
+
+      const pool = await this.databaseService.getPool();
+      transaction = new sql.Transaction(pool);
+
+      await transaction.begin();
+
+      const recuperacion = await this.buscarRecuperacionPasswordActiva(
+        transaction,
+        usuario.idUsuario,
+      );
+
+      if (!recuperacion) {
+        throw new BadRequestException(this.resetPasswordCodigoInvalidoMensaje);
+      }
+
+      if (recuperacion.intentosFallidos >= this.recoveryMaxFailedAttempts) {
+        await this.marcarRecuperacionPasswordUsada(
+          transaction,
+          recuperacion.idRecuperacion,
+        );
+        await transaction.commit();
+        transaction = null;
+        throw new BadRequestException(this.resetPasswordCodigoInvalidoMensaje);
+      }
+
+      const codigoValido = await bcrypt.compare(
+        resetPasswordDto.codigo,
+        recuperacion.codigoHash,
+      );
+
+      if (!codigoValido) {
+        await this.registrarIntentoFallidoRecuperacion(
+          transaction,
+          recuperacion.idRecuperacion,
+        );
+        await transaction.commit();
+        transaction = null;
+        throw new BadRequestException(this.resetPasswordCodigoInvalidoMensaje);
+      }
+
+      const passwordHashNuevo = await bcrypt.hash(
+        resetPasswordDto.passwordNueva,
+        this.passwordHashSaltRounds,
+      );
+      const updatePasswordRequest = new sql.Request(transaction);
+      updatePasswordRequest.input(
+        'IdUsuario',
+        sql.UniqueIdentifier,
+        usuario.idUsuario,
+      );
+      updatePasswordRequest.input(
+        'PasswordHashNuevo',
+        sql.NVarChar(255),
+        passwordHashNuevo,
+      );
+
+      const updatePasswordResult = await updatePasswordRequest.query(`
+        UPDATE Soporte.Usuario
+        SET
+          PasswordHash = @PasswordHashNuevo,
+          FechaModificacion = SYSDATETIME()
+        WHERE IdUsuario = @IdUsuario
+          AND Activo = 1;
+      `);
+
+      if ((updatePasswordResult.rowsAffected[0] ?? 0) === 0) {
+        throw new BadRequestException(this.resetPasswordCodigoInvalidoMensaje);
+      }
+
+      const request = new sql.Request(transaction);
+      request.input('IdUsuario', sql.UniqueIdentifier, usuario.idUsuario);
+      request.input(
+        'IdRecuperacion',
+        sql.UniqueIdentifier,
+        recuperacion.idRecuperacion,
+      );
+
+      await request.query(`
+        UPDATE Soporte.RecuperacionPassword
+        SET
+          Usado = 1,
+          FechaUso = SYSDATETIME()
+        WHERE IdRecuperacion = @IdRecuperacion
+          AND IdUsuario = @IdUsuario;
+
+        UPDATE Soporte.Sesion
+        SET Activa = 0
+        WHERE IdUsuario = @IdUsuario
+          AND Activa = 1;
+
+        INSERT INTO Soporte.Auditoria (
+          IdAuditoria,
+          IdUsuario,
+          Modulo,
+          Accion,
+          TablaAfectada,
+          IdRegistroAfectado,
+          Descripcion,
+          ValorAnterior,
+          ValorNuevo,
+          FechaRegistro
+        )
+        VALUES (
+          NEWID(),
+          @IdUsuario,
+          N'AUTH',
+          N'RESET_PASSWORD',
+          N'Soporte.Usuario',
+          CONVERT(nvarchar(100), @IdUsuario),
+          N'Password restablecido correctamente',
+          NULL,
+          NULL,
+          SYSDATETIME()
+        );
+      `);
+
+      await transaction.commit();
+      transaction = null;
+
+      return {
+        mensaje: 'Contraseña restablecida correctamente.',
+      };
+    } catch (error: unknown) {
+      if (transaction) {
+        await this.rollbackTransaction(transaction);
+      }
+
+      this.handleError(error, 'restablecer password');
     }
   }
 
@@ -671,6 +955,84 @@ export class AuthService {
     }
   }
 
+  private validarResetPasswordDto(resetPasswordDto: ResetPasswordDto): void {
+    if (resetPasswordDto.passwordNueva !== resetPasswordDto.confirmarPasswordNueva) {
+      throw new BadRequestException(
+        'passwordNueva y confirmarPasswordNueva deben coincidir.',
+      );
+    }
+
+    if (!/^\d{6}$/.test(resetPasswordDto.codigo)) {
+      throw new BadRequestException('codigo debe contener 6 digitos.');
+    }
+  }
+
+  private generarCodigoRecuperacion(): string {
+    return randomInt(0, 1_000_000).toString().padStart(6, '0');
+  }
+
+  private async buscarRecuperacionPasswordActiva(
+    transaction: sql.Transaction,
+    idUsuario: string,
+  ): Promise<RecuperacionPasswordRow | null> {
+    const request = new sql.Request(transaction);
+    request.input('IdUsuario', sql.UniqueIdentifier, idUsuario);
+
+    const result = await request.query<RecuperacionPasswordRow>(`
+      SELECT TOP (1)
+        CONVERT(varchar(36), IdRecuperacion) AS idRecuperacion,
+        CodigoHash AS codigoHash,
+        ISNULL(IntentosFallidos, 0) AS intentosFallidos
+      FROM Soporte.RecuperacionPassword WITH (UPDLOCK, HOLDLOCK)
+      WHERE IdUsuario = @IdUsuario
+        AND Usado = 0
+        AND FechaExpiracion >= SYSDATETIME()
+      ORDER BY FechaCreacion DESC;
+    `);
+
+    return result.recordset[0] ?? null;
+  }
+
+  private async marcarRecuperacionPasswordUsada(
+    transaction: sql.Transaction,
+    idRecuperacion: string,
+  ): Promise<void> {
+    const request = new sql.Request(transaction);
+    request.input('IdRecuperacion', sql.UniqueIdentifier, idRecuperacion);
+
+    await request.query(`
+      UPDATE Soporte.RecuperacionPassword
+      SET
+        Usado = 1,
+        FechaUso = COALESCE(FechaUso, SYSDATETIME())
+      WHERE IdRecuperacion = @IdRecuperacion;
+    `);
+  }
+
+  private async registrarIntentoFallidoRecuperacion(
+    transaction: sql.Transaction,
+    idRecuperacion: string,
+  ): Promise<void> {
+    const request = new sql.Request(transaction);
+    request.input('IdRecuperacion', sql.UniqueIdentifier, idRecuperacion);
+    request.input('MaxIntentos', sql.Int, this.recoveryMaxFailedAttempts);
+
+    await request.query(`
+      UPDATE Soporte.RecuperacionPassword
+      SET
+        IntentosFallidos = ISNULL(IntentosFallidos, 0) + 1,
+        Usado = CASE
+          WHEN ISNULL(IntentosFallidos, 0) + 1 >= @MaxIntentos THEN 1
+          ELSE Usado
+        END,
+        FechaUso = CASE
+          WHEN ISNULL(IntentosFallidos, 0) + 1 >= @MaxIntentos THEN SYSDATETIME()
+          ELSE FechaUso
+        END
+      WHERE IdRecuperacion = @IdRecuperacion;
+    `);
+  }
+
   private async registrarSesionYAuditoria(
     idUsuario: string,
     accessToken: string,
@@ -868,7 +1230,7 @@ export class AuthService {
 
       await cerrarSesionRequest.query(`
         UPDATE Soporte.Sesion
-        SET Activo = 0
+        SET Activa = 0
         WHERE IdSesion = @IdSesion
           AND IdUsuario = @IdUsuario
           AND Activa = 1;
