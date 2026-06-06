@@ -4,7 +4,7 @@ import {
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
-import * as sql from 'mssql/msnodesqlv8';
+import * as sql from 'mssql';
 import { join } from 'node:path';
 import pdfMake from 'pdfmake';
 import type {
