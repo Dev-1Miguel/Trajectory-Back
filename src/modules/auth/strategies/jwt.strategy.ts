@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import * as bcrypt from 'bcrypt';
 import type { Request } from 'express';
-import * as sql from 'mssql/msnodesqlv8';
+import * as sql from 'mssql';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 
 import { DatabaseService } from '../../../database/database.service';

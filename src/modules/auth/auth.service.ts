@@ -11,7 +11,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
-import * as sql from 'mssql/msnodesqlv8';
+import * as sql from 'mssql';
 import { randomInt, randomUUID } from 'node:crypto';
 
 import { DatabaseService } from '../../database/database.service';

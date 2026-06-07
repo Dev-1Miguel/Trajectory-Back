@@ -1,8 +1,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const sql = require('msnodesqlv8');
+const sql = require('mssql');
 
-const envPath = path.join(process.cwd(), '.env');
+const envPath = path.join(process.cwd(), '.env.local');
 
 if (fs.existsSync(envPath)) {
   const envFile = fs.readFileSync(envPath, 'utf8');
@@ -26,102 +26,53 @@ if (fs.existsSync(envPath)) {
   }
 }
 
-const host = process.env.DB_HOST || 'localhost';
-const instance = process.env.DB_INSTANCE;
-const database = process.env.DB_NAME || 'Trayectoria';
-const server = instance ? `${host}\\${instance}` : host;
-const pipeServer = instance
-  ? `np:\\\\.\\pipe\\MSSQL$${instance}\\sql\\query`
-  : undefined;
-
-const cases = [
-  {
-    name: 'ODBC 17 - instancia - trusted',
-    connectionString: [
-      'Driver={ODBC Driver 17 for SQL Server}',
-      `Server=${server}`,
-      `Database=${database}`,
-      'Trusted_Connection=Yes',
-      'Connection Timeout=5',
-    ].join(';'),
-  },
-  pipeServer && {
-    name: 'ODBC 17 - named pipe - trusted',
-    connectionString: [
-      'Driver={ODBC Driver 17 for SQL Server}',
-      `Server=${pipeServer}`,
-      `Database=${database}`,
-      'Trusted_Connection=Yes',
-      'Connection Timeout=5',
-    ].join(';'),
-  },
-  {
-    name: 'ODBC 17 - instancia - SSPI',
-    connectionString: [
-      'Driver={ODBC Driver 17 for SQL Server}',
-      `Server=${server}`,
-      `Database=${database}`,
-      'Integrated Security=SSPI',
-      'Connection Timeout=5',
-    ].join(';'),
-  },
-  {
-    name: 'ODBC 18 - instancia - trusted',
-    connectionString: [
-      'Driver={ODBC Driver 18 for SQL Server}',
-      `Server=${server}`,
-      `Database=${database}`,
-      'Trusted_Connection=Yes',
-      'Connection Timeout=5',
-    ].join(';'),
-  },
-  pipeServer && {
-    name: 'ODBC 18 - named pipe - trusted',
-    connectionString: [
-      'Driver={ODBC Driver 18 for SQL Server}',
-      `Server=${pipeServer}`,
-      `Database=${database}`,
-      'Trusted_Connection=Yes',
-      'Connection Timeout=5',
-    ].join(';'),
-  },
-].filter(Boolean);
-
-const stringifyError = (error) =>
-  JSON.stringify(error, Object.getOwnPropertyNames(error), 2);
-
-const runCase = (testCase) =>
-  new Promise((resolve) => {
-    sql.open(testCase.connectionString, (error, connection) => {
-      console.log(`\n=== ${testCase.name} ===`);
-
-      if (error) {
-        console.log(stringifyError(error));
-        resolve(false);
-        return;
-      }
-
-      connection.query('SELECT DB_NAME() AS databaseName', (queryError, rows) => {
-        if (queryError) {
-          console.log(stringifyError(queryError));
-          connection.close(() => resolve(false));
-          return;
-        }
-
-        console.log('Conexion OK');
-        console.log(rows);
-        connection.close(() => resolve(true));
-      });
-    });
-  });
-
-(async () => {
-  let connected = false;
-
-  for (const testCase of cases) {
-    // eslint-disable-next-line no-await-in-loop
-    connected = (await runCase(testCase)) || connected;
+const parseBoolean = (value, defaultValue) => {
+  if (value === undefined || value.trim() === '') {
+    return defaultValue;
   }
 
-  process.exitCode = connected ? 0 : 1;
+  return ['true', '1', 'yes', 'y'].includes(value.toLowerCase());
+};
+
+const parsePort = (value) => {
+  const parsedPort = Number(value);
+  return Number.isInteger(parsedPort) && parsedPort > 0 ? parsedPort : 1433;
+};
+
+const config = {
+  server: process.env.DB_HOST || 'localhost',
+  port: parsePort(process.env.DB_PORT),
+  database: process.env.DB_NAME || 'Trayectoria',
+  user: process.env.DB_USER || undefined,
+  password: process.env.DB_PASSWORD || undefined,
+  options: {
+    encrypt: parseBoolean(process.env.DB_ENCRYPT, false),
+    trustServerCertificate: parseBoolean(
+      process.env.DB_TRUST_SERVER_CERTIFICATE,
+      true,
+    ),
+  },
+};
+
+if (process.env.DB_INSTANCE) {
+  delete config.port;
+  config.options.instanceName = process.env.DB_INSTANCE;
+}
+
+(async () => {
+  let pool;
+
+  try {
+    pool = await sql.connect(config);
+    const result = await pool.request().query('SELECT DB_NAME() AS databaseName');
+    console.log('Conexion OK');
+    console.log(result.recordset);
+  } catch (error) {
+    console.log(JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+    process.exitCode = 1;
+  } finally {
+    if (pool) {
+      await pool.close();
+    }
+  }
 })();

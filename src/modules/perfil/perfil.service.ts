@@ -5,7 +5,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import * as sql from 'mssql/msnodesqlv8';
+import * as sql from 'mssql';
 
 import { DatabaseService } from '../../database/database.service';
 import { ActualizarInformacionPersonalDto } from './dto/actualizar-informacion-personal.dto';
