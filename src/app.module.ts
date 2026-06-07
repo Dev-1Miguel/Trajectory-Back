@@ -15,7 +15,7 @@ import { ReportesModule } from './modules/reportes/reportes.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: '.env',
+      envFilePath: process.env.NODE_ENV === 'prod' ? '.env.prod' : '.env.local',
       load: [databaseConfig],
     }),
     DatabaseModule,

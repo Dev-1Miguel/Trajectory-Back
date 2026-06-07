@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigType } from '@nestjs/config';
 import { inspect } from 'node:util';
-import * as sql from 'mssql/msnodesqlv8';
+import * as sql from 'mssql';
 
 import databaseConfig from '../config/database.config';
 
@@ -61,55 +61,33 @@ export class DatabaseService implements OnModuleDestroy {
     this.logger.log('SQL Server connection pool closed');
   }
 
-  private createPoolConfig(): sql.config & { connectionString?: string } {
-    return {
-      driver: 'msnodesqlv8',
+  private createPoolConfig(): sql.config {
+    const config: sql.config = {
       server: this.dbConfig.host,
+      port: this.dbConfig.port,
       database: this.dbConfig.database,
-      connectionString: this.createConnectionString(),
+      user: this.dbConfig.user,
+      password: this.dbConfig.password,
+      options: {
+        encrypt: this.dbConfig.encrypt,
+        trustServerCertificate: this.dbConfig.trustServerCertificate,
+      },
       pool: {
         max: 10,
         min: 0,
         idleTimeoutMillis: 30000,
       },
     };
-  }
-
-  private createConnectionString(): string {
-    const values = [
-      ['Driver', `{${this.dbConfig.driver}}`],
-      ['Server', this.getServerValue()],
-      ['Database', this.dbConfig.database],
-    ];
-
-    if (this.dbConfig.trustedConnection) {
-      values.push(['Trusted_Connection', 'Yes']);
-    } else {
-      values.push(['Uid', this.dbConfig.user ?? '']);
-      values.push(['Pwd', this.dbConfig.password ?? '']);
-    }
-
-    if (this.dbConfig.encrypt) {
-      values.push(['Encrypt', 'Yes']);
-      values.push([
-        'TrustServerCertificate',
-        this.dbConfig.trustServerCertificate ? 'Yes' : 'No',
-      ]);
-    }
-
-    return values.map(([key, value]) => `${key}=${value}`).join(';');
-  }
-
-  private getServerValue(): string {
-    if (this.dbConfig.useNamedPipe && this.dbConfig.instanceName) {
-      return `np:\\\\.\\pipe\\MSSQL$${this.dbConfig.instanceName}\\sql\\query`;
-    }
 
     if (this.dbConfig.instanceName) {
-      return `${this.dbConfig.host}\\${this.dbConfig.instanceName}`;
+      delete config.port;
+      config.options = {
+        ...config.options,
+        instanceName: this.dbConfig.instanceName,
+      };
     }
 
-    return `${this.dbConfig.host},${this.dbConfig.port}`;
+    return config;
   }
 
   private formatError(error: unknown): string {

@@ -1,5 +1,5 @@
 import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
-import * as sql from 'mssql/msnodesqlv8';
+import * as sql from 'mssql';
 
 import { DatabaseService } from '../../database/database.service';
 import { ActualizarBilleteraDto } from './dto/actualizar-billetera.dto';
