@@ -7,6 +7,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { BilleterasModule } from './modules/billeteras/billeteras.module';
 import { CategoriasModule } from './modules/categorias/categorias.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { HealthModule } from './modules/health/health.module';
 import { MovimientosModule } from './modules/movimientos/movimientos.module';
 import { PerfilModule } from './modules/perfil/perfil.module';
 import { ReportesModule } from './modules/reportes/reportes.module';
@@ -24,6 +25,7 @@ import { ReportesModule } from './modules/reportes/reportes.module';
     CategoriasModule,
     MovimientosModule,
     DashboardModule,
+    HealthModule,
     PerfilModule,
     ReportesModule,
   ],
