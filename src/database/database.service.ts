@@ -77,6 +77,7 @@ export class DatabaseService implements OnModuleDestroy {
       database: this.dbConfig.database,
       user: this.dbConfig.user,
       password: this.dbConfig.password,
+      connectionTimeout: 40000,
       options: {
         encrypt: this.dbConfig.encrypt,
         trustServerCertificate: this.dbConfig.trustServerCertificate,
